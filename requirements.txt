@@ -1,0 +1,11 @@
+# ZeroQueue backend dependencies - all free, pip-installable into the GenAI conda env.
+fastapi==0.115.6          # web framework for the API
+uvicorn==0.30.6           # runs the FastAPI app locally
+httpx==0.27.2             # HTTP client for Intercom/Groq API calls (also used by tests)
+pytest==8.3.4             # test runner
+python-multipart==0.0.9   # lets FastAPI receive file uploads (the attachment feature)
+pypdf==4.3.1              # reads text out of PDF invoices (pure Python, no extras)
+PyMuPDF==1.24.10          # renders scanned PDF pages to images so OCR can read them
+pytesseract==0.3.13       # OCR for images (needs the free Tesseract installer, see README)
+Pillow==10.4.0            # image loading for OCR
+opencv-python-headless==4.10.0.84  # pulls frames out of video files for OCR

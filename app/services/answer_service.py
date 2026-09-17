@@ -1,0 +1,42 @@
+"""Builds the grounded answer from retrieved passages.
+
+MOCK_MODE (default): no LLM call. The answer is assembled from the top
+passage text with explicit citations. This keeps the system fully offline
+and makes the citation contract visible.
+
+REAL BUILD: set MOCK_MODE=false and GROQ_API_KEY; then the passages,
+source ids and rules go to the Groq model (see app/adapters/llm.py and
+app/prompts/support_answer.txt) and the model must answer ONLY from them.
+"""
+from typing import List, Tuple
+
+from app import config
+from app.adapters import llm
+from models.schemas import Citation
+from app.services.moss_service import Passage
+
+
+def make_citations(passages: List[Passage]) -> List[Citation]:
+    """At most 3 citations, labelled like: [1] Faq - Shipping Times."""
+    out = []
+    for i, p in enumerate(passages[:3], start=1):
+        out.append(Citation(label=f"[{i}] {p.title} - {p.section}",
+                            url=p.safe_url or None))
+    return out
+
+
+def build_answer(query: str, passages: List[Passage]) -> Tuple[str, List[Citation]]:
+    citations = make_citations(passages)
+    if not config.MOCK_MODE and config.GROQ_API_KEY:
+        # Real path: grounded generation constrained to the passages.
+        text = llm.grounded_answer(query, passages)
+    else:
+        # Mock path: quote the strongest passage directly. Honest and
+        # deterministic, which is exactly what the first live demo needs.
+        top = passages[0]
+        body = " ".join(top.text.split())[:400]
+        text = (f"Based on our {top.title.lower()} ({top.section}): {body}\n\n"
+                f"Next step: if this does not solve it, say \"human\" and "
+                f"a teammate will take over.")
+    source_line = "  ".join(c.label for c in citations)
+    return f"{text}\n\nSources: {source_line}", citations
