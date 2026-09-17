@@ -37,8 +37,9 @@ zeroqueue/
 
   src/web/              <- the web page (Next.js)
     app/page.tsx        <- the one screen
-    components/ChatPanel.tsx <- messages, input, attach button
+    components/ChatPanel.tsx <- messages, input, attach menu, staged preview
     components/TraceCard.tsx <- the Moss Trace strip
+    components/IntercomBoot.tsx <- loads the real Messenger bubble (needs app id)
     lib/session.ts      <- anonymous session id
     next.config.js      <- loads NEXT_PUBLIC_* from the root .env (single .env rule)
 

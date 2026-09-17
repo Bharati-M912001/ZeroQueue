@@ -13,18 +13,33 @@ Runs on your laptop with zero accounts and zero cost (mock mode).
 
 ## What works out of the box
 
-- The ZeroQueue web page: one simple chat screen with an **Attach** button
-  and the **Moss Trace** strip (retrieval ms, total ms, sources, confidence).
+- The ZeroQueue web page: a clean Copilot-style chat (blue right-aligned
+  bubbles for you, clean left-aligned answers, a pill input bar with a
+  **+** attach menu and a Send button) and the **Moss Trace** strip
+  (retrieval ms, total ms, sources, confidence).
+- Attachments end to end: a staged preview above the input bar before you
+  send (thumbnail for images, file chip otherwise, X to remove), the file
+  rendered **inside your chat bubble** after sending, and the OCR read-out
+  note under it.
 - Grounded answers from the 18-file Nivara Botanics knowledge base in
   `knowledge/`, every answer ending in a `Sources:` line.
 - Attachment reading: txt/PDF invoices with zero setup; images, scanned
   PDFs, and videos with the free Tesseract install (see
-  `docs/ocr-and-attachments.md`).
+  `docs/ocr-and-attachments.md`). OCR calls the tesseract program
+  directly - `TESSERACT_CMD` in `.env` accepts the exe OR just the
+  install folder, and the standard install location is found
+  automatically.
+- **The real Intercom Messenger on the page**: set
+  `NEXT_PUBLIC_INTERCOM_APP_ID` and the Messenger bubble loads. Visitor
+  messages flow Messenger -> webhook -> grounded bot reply posted back
+  into the same conversation; human handoff assigns the conversation to
+  your team in the Intercom Inbox, where you reply as the human.
 - Human handoff: say "human", or ask something the knowledge base cannot
   answer - the bot stops, summarizes, and hands off instead of guessing.
-- The Intercom webhook endpoint (signature check, immediate 200, dedupe,
-  loop prevention), carried over from the live-verified earlier build.
-- 14 passing automated tests, all offline.
+- The Intercom webhook endpoint (signature check with the app's client
+  secret, immediate 200, dedupe, loop prevention for admin/bot authors,
+  step-by-step logging of every event).
+- 19 passing automated tests, all offline.
 
 What is still a seam (by design): real Moss retrieval plugs into ONE
 function (`app/adapters/moss.py`); Groq writes the final wording when you
@@ -39,7 +54,7 @@ turn mock mode off. Nothing else in the app changes when you do either.
 | Tesseract OCR | https://github.com/UB-Mannheim/tesseract/wiki | image/scanned-PDF/video OCR |
 | Groq API key | https://console.groq.com -> API Keys | real LLM answers (mock mode off) |
 | ngrok | https://ngrok.com | letting Intercom reach your laptop |
-| Intercom | https://app.intercom.io | the production Messenger channel |
+| Intercom | https://app.intercom.com (Developer Hub) | the production Messenger channel |
 | Moss | per the hackathon docs | real retrieval (Phase 1) |
 
 ## Setup (Windows, one command at a time)
@@ -54,7 +69,7 @@ That creates your `.env`, installs the Python packages into the `GenAI`
 conda env, and installs the web page packages. If `conda` is not
 recognized in a fresh terminal, open "Anaconda Prompt" instead.
 
-## Run it (two terminals, keep both open)
+## Run it (three terminals, keep all three open)
 
 Terminal 1 - the backend:
 
@@ -63,6 +78,10 @@ scripts\run_backend.bat
 ```
 
 Check: open http://localhost:8000/health - you should see `"status": "ok"`.
+(This script reloads automatically when you change CODE in `app\` or
+`models\` - and only those folders. Runtime files like `zeroqueue.db` and
+`uploads\` change on every message; watching them too made the server
+restart itself mid-reply and answers silently never arrived.)
 
 Terminal 2 - the web page:
 
@@ -72,18 +91,46 @@ scripts\run_web.bat
 
 Open http://localhost:3000.
 
+Terminal 3 - the tunnel (only needed for the Intercom demo):
+
+```
+ngrok http --url=<your-reserved-ngrok-url> 8000
+```
+
+(or plain `ngrok http 8000` without a reserved URL). Then put
+`https://<your-ngrok-url>/api/webhooks/intercom` as the webhook endpoint
+in the Intercom Developer Hub (your app -> Webhooks), with the topics
+`conversation.user.created` and `conversation.user.replied`. If the ngrok
+URL ever changes, update the endpoint in Intercom to match.
+
 ## Try the demo (5 minutes)
+
+In the built-in chat on the page:
 
 1. Ask **"How long does shipping take?"** - watch the cited answer and
    the Moss Trace numbers fill in.
-2. Click **Attach**, pick `docs\samples\invoice-sample.txt`, and ask
-   **"Can I return this order?"** - the answer uses the policy AND the
-   invoice. The chat shows an honest note about what was read.
+2. Click **+** -> **Add photos & files**, pick
+   `docs\samples\invoice-sample.txt` - see the staged preview above the
+   bar - and ask **"Can I return this order?"**. The file shows inside
+   your bubble, the OCR note appears under it, and the answer uses the
+   policy AND the invoice.
 3. Ask **"Can you recommend a birthday gift for my uncle?"** - the bot
    refuses to guess and hands off to a human. The Trace switches to
    "escalated" with the reason.
 4. Send anything else - the bot stays paused because a human owns the
    conversation now. That is the intended behavior.
+
+End to end through the real Messenger (needs `.env` filled in - see
+"Connect the real services"):
+
+5. Open the Messenger bubble on the page and send **"Where is my order?"**
+   as a visitor. Watch the backend terminal narrate the event
+   (`event conversation.user.created ...` -> `customer text ...` ->
+   `pipeline result ... answered` -> `reply posted ...`), then the bot's
+   cited answer appears in the Messenger.
+6. Say **"talk to a human"** - the conversation lands with your team in
+   the Intercom Inbox with an internal summary. Reply there as the human;
+   the visitor sees your answer in the Messenger.
 
 ## Run the tests
 
@@ -91,10 +138,11 @@ Open http://localhost:3000.
 scripts\run_tests.bat
 ```
 
-14 tests, all offline: webhook (fast 200, dedupe, loop prevention, bad
-signature rejected), chat (citations, escalation, trace), and the
-attachment feature (invoice text feeds the answer, bad file types get
-clear errors).
+19 tests, all offline: webhook (fast 200, dedupe, loop prevention, bad
+signature rejected, real payload shapes for both topics, lead visitors
+answered), chat (citations, escalation, trace), and the attachment
+feature (invoice text feeds the answer, retrieval is not hijacked by
+invoice wording, bad file types get clear errors).
 
 ## Understand the code (do this before the demo)
 
@@ -103,16 +151,22 @@ clear errors).
    happens from "customer hits Send" to "answer with citations".
 3. The big comment at the top of `app/api/intercom_webhook.py` - the
    webhook flow, step by step. Read it once and the webhook is yours.
+4. `docs/troubleshooting.md` - the errors you will actually hit and their
+   fixes.
 
 ## Connect the real services (when ready)
 
 - **Groq**: paste your free key into `.env` (GROQ_API_KEY) and set
   MOCK_MODE=false. Answers are now written by the LLM using ONLY the
   retrieved passages.
-- **Intercom**: `docs/intercom-setup.md`. Use the NEW rotated token -
-  the old one was exposed in chat on Sep 16; revoke it in Intercom and
-  never send tokens through chat. The webhook URL Intercom needs is
-  `https://<your-ngrok-url>/api/webhooks/intercom`.
+- **Intercom**: `docs/intercom-setup.md`. In the Developer Hub for your
+  app you need THREE values in `.env`: the access token (INTERCOM_ACCESS_TOKEN -
+  use the ROTATED one, the old token was exposed in chat on Sep 16), the
+  app's **client secret** from the app's "Basic information" page
+  (INTERCOM_WEBHOOK_SECRET - Intercom signs webhooks with it), and your
+  app id (NEXT_PUBLIC_INTERCOM_APP_ID) so the Messenger bubble loads on
+  the page. Never send any of these through chat. The webhook URL
+  Intercom needs is `https://<your-ngrok-url>/api/webhooks/intercom`.
 - **Moss**: `python scripts\index_knowledge.py` previews the sections;
   wire the SDK in `app/adapters/moss.py` per the hackathon docs.
 
