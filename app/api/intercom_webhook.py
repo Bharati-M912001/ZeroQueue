@@ -113,6 +113,39 @@ def _process_event_safely(payload: dict) -> None:
             "INTERCOM_ACCESS_TOKEN, and INTERCOM_ADMIN_ID")
 
 
+def _latest_message_block(item: dict) -> dict:
+    """Find the newest customer message inside a webhook conversation item.
+
+    Intercom puts it in DIFFERENT places per event topic (this was the
+    "(empty)" bug - we used to read only conversation_message, which real
+    payloads do not have):
+    - conversation.user.created -> item.source (the first message)
+    - conversation.user.replied -> the LAST part of item.conversation_parts
+    Older assumed shapes (conversation_message, the item itself) are kept
+    as fallbacks so nothing breaks silently.
+    """
+    parts = (item.get("conversation_parts") or {}).get("conversation_parts") or []
+    if parts:
+        return parts[-1]
+    if item.get("source"):
+        return item["source"]
+    return item.get("conversation_message") or item
+
+
+def _attachment_refs(block: dict):
+    """Attachment references from a message block, as (url, filename) pairs.
+    Intercom sends attachments as objects: [{"type": "upload", "name": ...,
+    "url": ...}]. A plain "attachment_urls" string list is also tolerated."""
+    refs = []
+    for a in block.get("attachments") or []:
+        if isinstance(a, dict) and a.get("url"):
+            refs.append((a["url"], a.get("name") or ""))
+    for u in block.get("attachment_urls") or []:
+        if isinstance(u, str):
+            refs.append((u, ""))
+    return refs
+
+
 def process_event(payload: dict) -> None:
     """Background worker: normalize -> pipeline -> reply/assign via Intercom.
 
@@ -130,9 +163,8 @@ def process_event(payload: dict) -> None:
     # Messenger visitor is a "lead" until identified); "admin", "bot" and
     # "team" are OUR side. Ignoring "lead" here would silently drop every
     # real customer who is not logged in - that was the no-reply bug.
-    author = (item.get("conversation_message", {}) or {}).get("author", {}) \
-        or item.get("author", {})
-    author_type = author.get("type", "user")
+    block = _latest_message_block(item)
+    author_type = (block.get("author") or {}).get("type", "user")
     log.info("event %s on conversation %s, author type %s",
              topic, conversation_id, author_type)
     if author_type in ("admin", "bot", "team"):
@@ -140,9 +172,9 @@ def process_event(payload: dict) -> None:
         return
 
     # Step 5c: latest customer text; Intercom bodies are HTML like <p>hi</p>.
-    raw_text = (item.get("conversation_message", {}) or {}).get("body") \
-        or item.get("body", "")
-    message = re.sub(r"<[^>]+>", " ", raw_text or "").strip()
+    # A body like "[Image] Where is my order?" is real text, not empty.
+    raw_text = block.get("body") or ""
+    message = re.sub(r"<[^>]+>", " ", raw_text).strip()
     log.info("customer text on %s: %.80s", conversation_id, message or "(empty)")
 
     convo_pk = pipeline.get_or_create_conversation(intercom_id=conversation_id)
@@ -151,13 +183,13 @@ def process_event(payload: dict) -> None:
     # the Messenger; Intercom puts download URLs on the message. We fetch
     # the first one and read it with the same OCR used by the web chat.
     attachment_text, attachment_note = "", ""
-    attachment_urls = (item.get("conversation_message", {}) or {}).get("attachment_urls") \
-        or item.get("attachment_urls") or []
-    if attachment_urls:
+    refs = _attachment_refs(block)
+    if refs:
+        url, att_name = refs[0]
         try:
             log.info("downloading attachment for %s", conversation_id)
-            data = intercom.download_attachment(attachment_urls[0])
-            filename = attachment_urls[0].rsplit("/", 1)[-1].split("?")[0] or "attachment"
+            data = intercom.download_attachment(url)
+            filename = att_name or url.rsplit("/", 1)[-1].split("?")[0] or "attachment"
             if data:
                 attachment_text, attachment_note = attachment_service.save_and_extract(
                     convo_pk, filename, data)
