@@ -66,6 +66,9 @@ MOSS_INDEX_NAME = os.environ.get("MOSS_INDEX_NAME", "")
 
 # --- LLM (Groq free tier; only used when MOCK_MODE=false) ---
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
+# Groq shut down llama-3.1-8b-instant on 2026-08-16; openai/gpt-oss-20b is
+# their free-tier replacement. If this 404s again, pick a current model at
+# https://console.groq.com/docs/models and set GROQ_MODEL in .env.
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
 GROQ_VISION_MODEL = os.environ.get(
     "GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")

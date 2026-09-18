@@ -69,3 +69,40 @@ def test_invoice_attachment_does_not_hijack_retrieval(client):
     body = resp.json()
     assert body["status"] == "answered"
     assert "Orders And Order Status Faq" in body["citations"][0]["label"]
+
+
+def test_llm_failure_falls_back_to_passage_quote(monkeypatch):
+    """A Groq outage or retired model must never kill a live answer."""
+    from app.services import answer_service, moss_service
+    from app import config
+    monkeypatch.setattr(config, "MOCK_MODE", False)
+    monkeypatch.setattr(config, "GROQ_API_KEY", "gsk_fake")
+
+    def boom(query, passages):
+        raise RuntimeError("groq 404")
+    monkeypatch.setattr(answer_service.llm, "grounded_answer", boom)
+
+    passages = [moss_service.Passage(
+        source_key="faq", title="Faq", section="Shipping",
+        text="Orders ship in 3 days.", score=1.0, safe_url="")]
+    text, citations = answer_service.build_answer("when does it ship?", passages)
+    assert "Orders ship in 3 days." in text
+    assert citations
+
+
+def test_llm_sources_line_is_not_duplicated(monkeypatch):
+    """The model ends with its own Sources: line; we append ours. One only."""
+    from app.services import answer_service, moss_service
+    from app import config
+    monkeypatch.setattr(config, "MOCK_MODE", False)
+    monkeypatch.setattr(config, "GROQ_API_KEY", "gsk_fake")
+    monkeypatch.setattr(
+        answer_service.llm, "grounded_answer",
+        lambda q, ps: "Orders ship in 3 days.\n\nSources: [1] Faq - Shipping")
+
+    passages = [moss_service.Passage(
+        source_key="faq", title="Faq", section="Shipping",
+        text="Orders ship in 3 days.", score=1.0, safe_url="")]
+    text, _ = answer_service.build_answer("when does it ship?", passages)
+    assert text.lower().count("sources:") == 1
+    assert "Orders ship in 3 days." in text

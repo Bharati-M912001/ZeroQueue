@@ -109,6 +109,30 @@ def test_created_event_reads_item_source(client):
     assert _runs_for(client, "convo-e6") == 1
 
 
+def test_created_event_with_bot_autoreply_still_answered(client):
+    # Intercom Operator can auto-post right after the visitor writes; the
+    # created payload then ends with a BOT part. The visitor's message in
+    # item.source must still be the one we answer.
+    event = {
+        "id": "e9",
+        "topic": "conversation.user.created",
+        "data": {"item": {
+            "id": "convo-e9",
+            "source": {"body": "<p>Where is my order?</p>",
+                       "author": {"type": "user"}, "attachments": []},
+            "conversation_parts": {"conversation_parts": [
+                {"part_type": "comment", "body": "<p>Where is my order?</p>",
+                 "author": {"type": "user"}},
+                {"part_type": "comment", "body": "<p>Hi! I'm the Operator.</p>",
+                 "author": {"type": "bot"}},
+            ]},
+        }},
+    }
+    resp = client.post("/api/webhooks/intercom", content=json.dumps(event))
+    assert resp.json()["status"] == "accepted"
+    assert _runs_for(client, "convo-e9") == 1
+
+
 def test_replied_event_reads_last_conversation_part(client):
     resp = client.post("/api/webhooks/intercom",
                        content=json.dumps(_replied_event("e7", "What is the returns policy?")))

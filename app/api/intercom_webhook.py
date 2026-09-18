@@ -113,23 +113,28 @@ def _process_event_safely(payload: dict) -> None:
             "INTERCOM_ACCESS_TOKEN, and INTERCOM_ADMIN_ID")
 
 
-def _latest_message_block(item: dict) -> dict:
-    """Find the newest customer message inside a webhook conversation item.
+def _message_block_for(topic: str, item: dict) -> dict:
+    """Find the customer message that TRIGGERED this webhook event.
 
-    Intercom puts it in DIFFERENT places per event topic (this was the
-    "(empty)" bug - we used to read only conversation_message, which real
-    payloads do not have):
-    - conversation.user.created -> item.source (the first message)
-    - conversation.user.replied -> the LAST part of item.conversation_parts
-    Older assumed shapes (conversation_message, the item itself) are kept
+    The right place depends on the topic, and getting this wrong silently
+    drops real customers:
+    - conversation.user.created -> ALWAYS item.source (the visitor's first
+      message). The last conversation part is NOT safe here: Intercom's
+      Operator/bot can auto-post a greeting right after the visitor
+      writes, and then the newest part is bot-authored - reading it makes
+      loop prevention ignore the whole event (the "author type bot" bug).
+    - conversation.user.replied -> the LAST part of
+      item.conversation_parts (that is the reply the event is about).
+    Older assumed shapes (conversation_message, the item itself) remain
     as fallbacks so nothing breaks silently.
     """
     parts = (item.get("conversation_parts") or {}).get("conversation_parts") or []
+    if "created" in topic:
+        return item.get("source") or (parts[-1] if parts else {}) \
+            or item.get("conversation_message") or item
     if parts:
         return parts[-1]
-    if item.get("source"):
-        return item["source"]
-    return item.get("conversation_message") or item
+    return item.get("source") or item.get("conversation_message") or item
 
 
 def _attachment_refs(block: dict):
@@ -163,7 +168,7 @@ def process_event(payload: dict) -> None:
     # Messenger visitor is a "lead" until identified); "admin", "bot" and
     # "team" are OUR side. Ignoring "lead" here would silently drop every
     # real customer who is not logged in - that was the no-reply bug.
-    block = _latest_message_block(item)
+    block = _message_block_for(topic, item)
     author_type = (block.get("author") or {}).get("type", "user")
     log.info("event %s on conversation %s, author type %s",
              topic, conversation_id, author_type)
